@@ -1,0 +1,224 @@
+clear all
+load('O_111_simple.mat');
+
+P(P==0)=2;
+
+% Fo-Ni concentration in the olivine (or olivine core)
+data_Fo_core=(P==1).*0.89;
+data_Ni_core=(P==1).*0.42;
+
+%Fo-Ni concentration in the melt (far field) and olivine edge
+data_Fo_ff=(P==2).*0.815;
+data_Ni_ff=(P==2).*0.23;
+
+% %Fo-Ni concentration in the olivine rim if a rim grew
+% data_Fo_rim=(P==2).*0.85;
+% data_Ni_rim=(P==2).*0.3;
+
+%Combine both crystal and melt concentration matrices into one
+data_Fo=data_Fo_core+data_Fo_ff;%+data_Fo_rim;
+data_Ni=data_Ni_core+data_Ni_ff;%+data_Ni_rim;
+
+%% reallocate into Fo variable
+Fo=data_Fo;
+Ni=data_Ni;
+
+%mask matrix used to mask melt concentrations later in diffusion loop
+data_mask_Fo=data_Fo_ff==0;
+data_mask_Ni=data_Ni_ff==0;
+
+%Define the diffusivity calculation constants
+R=8.3144621; %gas constant in J/(mol*K)
+T=1210+273.15; %temperature in K
+Q_Fo=201000; %activation energy in J/mol - from Dohmen and Chakraborty 2007
+Q_Ni=220000;
+fO2=(1.*10^-11)./((10^-5)); %oxygen fugacity in Pa
+D0_Fo=10^-9.21; %pre-exponential factor in m2/s - from Dohmen and Chakraborty 2007
+D0_Ni=3.84.*(10^-9); %pre-exponential factor in m2/s - from Dohmen and Chakraborty 2007
+
+%define x y z arrays from the size of the Fo 3d matrix
+[x1 y1 z1]=size(data_Fo);
+x=1:1:x1;
+y=1:1:y1;
+z=1:1:z1;
+
+%get maximum and minimum Fo contents for later plotting axis limits below
+max_Fo=max(max(max(Fo)));
+min_Fo=min(min(min(Fo)));
+max_Ni=max(max(max(Ni)));
+min_Ni=min(min(min(Ni)));
+
+
+%--------------------------------------------------------------------------
+%   set up parameter space and pre-allocate arrays
+%--------------------------------------------------------------------------
+
+%% define the space step size in microns
+dx=5.*((x(2)-x(1)));
+dy=5.*((y(2)-y(1)));
+dz=5.*((z(2)-z(1)));
+
+%set initial diffusion coefficent for stability criterion (boundary condition)
+Dc_ini_Fo=(10^12).*D0_Fo.*((fO2./(10^-7)).^(1/6)).*10.^(3.*(0.9-Fo)).*exp(-Q_Fo./(R.*T));%define initial diffusion coefficient along c in microns^2/sec
+%Dc_ini_Ni=(10^12).*D0_Ni.*((fO2./(10^-6)).^(1/4.25)).*10.^(1.5.*(0.9-Fo)).*exp(-Q_Ni./(R.*T));%define initial diffusion coefficient along c in microns^2/sec
+Dc_ini_Ni=0.3.*Dc_ini_Fo;
+
+%define the time step size in seconds using the 3D stability condition R<0.165
+dt=min(min(min((0.165.*dx.^2)./Dc_ini_Fo)));     %calculate max time step dt that fullfills stability criteria (in secs)
+duration=1*50*24*3600;          %total desired duration of simulation in years*days*hours*secs
+timesteps=int32(duration/dt); %calculate total number of timesteps needed
+
+%set initial boundary conditions and define some variables
+c_new_Fo=Fo; %assign initial concentration matrix
+c_old_Fo=zeros(x1,y1,z1); %build empty 'previous concentration' matrix for loop
+c_all_Fo=zeros(x1,y1,timesteps); %build a 2D matrix containing all timesteps to later record the evolution of one of the crystal slices through time
+%c_all_Fo_cr=zeros(1,timesteps);
+c_new_Ni=Ni; %assign initial concentration matrix
+c_old_Ni=zeros(x1,y1,z1); %build empty 'previous concentration' matrix for loop
+c_all_Ni=zeros(x1,y1,timesteps); %build a 2D matrix containing all timesteps to later record the evolution of one of the crystal slices through time
+%c_all_Ni_cr=zeros(1,timesteps);
+
+%display a waitbar
+wb = waitbar(0,'Diffusing...');
+tic;%start the waitbar stopwatch
+
+%define the number of timesteps after which a 3D diffusion matrix is saved
+time_to_save=100;
+
+%% perform diffusion simulation
+for l=1:timesteps
+    c_old_Fo=c_new_Fo;%the old concentration is defined as whatever was the previously define new concentration
+    c_old_Ni=c_new_Ni;%the old concentration is defined as whatever was the previously define new concentration
+    Dc_Fo=(10^12).*D0_Fo.*((fO2./(10^-7)).^(1/6)).*10.^(3.*(0.9-c_old_Fo)).*exp(-Q_Fo./(R.*T));%Dc_ini_Fo;%calculate concentration-dependent D along c axis
+    Da_Fo=(1/6).*Dc_Fo;%calculate D along a axis
+    Db_Fo=(1/6).*Dc_Fo;%calculate D along b axis
+    %Dc_Ni=(10^12).*D0_Ni.*((fO2./(10^-6)).^(1/4.25)).*10.^(1.5.*(0.9-c_old_Fo)).*exp(-Q_Ni./(R.*T));%Dc_ini_Ni;%calculate concentration-dependent D along c axis
+    Dc_Ni=0.3.*Dc_Fo;
+    Da_Ni=(1/6).*Dc_Ni;%calculate D along a axis
+    Db_Ni=(1/6).*Dc_Ni;%calculate D along b axis
+     
+    for k=2:z1-1
+        for j=2:y1-1
+            for i=2:x1-1
+%                 % concentration independent
+%                 c_old_dif2x_Fo=((c_old_Fo(i+1,j,k)-2.*c_old_Fo(i,j,k)+c_old_Fo(i-1,j,k))./(dx.^2));%define finite difference equivalent of d^2C/dx^2
+%                 c_old_dif2y_Fo=((c_old_Fo(i,j+1,k)-2.*c_old_Fo(i,j,k)+c_old_Fo(i,j-1,k))./(dy.^2));%define finite difference equivalent of d^2C/dy^2
+%                 c_old_dif2z_Fo=((c_old_Fo(i,j,k+1)-2.*c_old_Fo(i,j,k)+c_old_Fo(i,j,k-1))./(dz.^2));%define finite difference equivalent of d^2C/dz^2
+%                 
+%                 c_old_dif2x_Ni=((c_old_Ni(i+1,j,k)-2.*c_old_Ni(i,j,k)+c_old_Ni(i-1,j,k))./(dx.^2));%define finite difference equivalent of d^2C/dx^2
+%                 c_old_dif2y_Ni=((c_old_Ni(i,j+1,k)-2.*c_old_Ni(i,j,k)+c_old_Ni(i,j-1,k))./(dy.^2));%define finite difference equivalent of d^2C/dy^2
+%                 c_old_dif2z_Ni=((c_old_Ni(i,j,k+1)-2.*c_old_Ni(i,j,k)+c_old_Ni(i,j,k-1))./(dz.^2));%define finite difference equivalent of d^2C/dz^2
+                
+                % concentration dependent
+                c_old_difx_Fo=((c_old_Fo(i+1,j,k)-c_old_Fo(i-1,j,k))./(2.*dx));%define finite difference equivalent of dC/dx
+                c_old_dif2x_Fo=((c_old_Fo(i+1,j,k)-2.*c_old_Fo(i,j,k)+c_old_Fo(i-1,j,k))./(dx.^2));%define finite difference equivalent of d^2C/dx^2
+                c_old_dify_Fo=((c_old_Fo(i,j+1,k)-c_old_Fo(i,j-1,k))./(2.*dy));%define finite difference equivalent of dC/dy
+                c_old_dif2y_Fo=((c_old_Fo(i,j+1,k)-2.*c_old_Fo(i,j,k)+c_old_Fo(i,j-1,k))./(dy.^2));%define finite difference equivalent of d^2C/dy^2
+                c_old_difz_Fo=((c_old_Fo(i,j,k+1)-c_old_Fo(i,j,k-1))./(2.*dz));%define finite difference equivalent of dC/dz
+                c_old_dif2z_Fo=((c_old_Fo(i,j,k+1)-2.*c_old_Fo(i,j,k)+c_old_Fo(i,j,k-1))./(dz.^2));%define finite difference equivalent of d^2C/dz^2
+                D_difx_Fo=((Da_Fo(i+1,j,k)-Da_Fo(i-1,j,k))./(2.*dx));%define finite difference equivalent of dD/dx
+                D_dify_Fo=((Db_Fo(i,j+1,k)-Db_Fo(i,j-1,k))./(2.*dy));%define finite difference equivalent of dD/dy
+                D_difz_Fo=((Dc_Fo(i,j,k+1)-Dc_Fo(i,j,k-1))./(2.*dz));%define finite difference equivalent of dD/dz
+                
+                c_old_difx_Ni=((c_old_Ni(i+1,j,k)-c_old_Ni(i-1,j,k))./(2.*dx));%define finite difference equivalent of dC/dx
+                c_old_dif2x_Ni=((c_old_Ni(i+1,j,k)-2.*c_old_Ni(i,j,k)+c_old_Ni(i-1,j,k))./(dx.^2));%define finite difference equivalent of d^2C/dx^2
+                c_old_dify_Ni=((c_old_Ni(i,j+1,k)-c_old_Ni(i,j-1,k))./(2.*dy));%define finite difference equivalent of dC/dy
+                c_old_dif2y_Ni=((c_old_Ni(i,j+1,k)-2.*c_old_Ni(i,j,k)+c_old_Ni(i,j-1,k))./(dy.^2));%define finite difference equivalent of d^2C/dy^2
+                c_old_difz_Ni=((c_old_Ni(i,j,k+1)-c_old_Ni(i,j,k-1))./(2.*dz));%define finite difference equivalent of dC/dz
+                c_old_dif2z_Ni=((c_old_Ni(i,j,k+1)-2.*c_old_Ni(i,j,k)+c_old_Ni(i,j,k-1))./(dz.^2));%define finite difference equivalent of d^2C/dz^2
+                D_difx_Ni=((Da_Ni(i+1,j,k)-Da_Ni(i-1,j,k))./(2.*dx));%define finite difference equivalent of dD/dx
+                D_dify_Ni=((Db_Ni(i,j+1,k)-Db_Ni(i,j-1,k))./(2.*dy));%define finite difference equivalent of dD/dy
+                D_difz_Ni=((Dc_Ni(i,j,k+1)-Dc_Ni(i,j,k-1))./(2.*dz));%define finite difference equivalent of dD/dz
+                
+%                 %concentration independent
+%                 %main calculation of new [C] from old [C] using the above-defined finite difference terms
+%                 c_new_Fo(i,j,k)=c_old_Fo(i,j,k)+((dt).*((Da_Fo.*c_old_dif2x_Fo))...
+%                     +(dt).*((Db_Fo.*c_old_dif2y_Fo))...
+%                     +(dt).*((Dc_Fo.*c_old_dif2z_Fo)));
+%                 
+%                 %main calculation of new [C] from old [C] using the above-defined finite difference terms
+%                 c_new_Ni(i,j,k)=c_old_Ni(i,j,k)+((dt).*((Da_Ni.*c_old_dif2x_Ni))...
+%                     +(dt).*((Db_Ni.*c_old_dif2y_Ni))...
+%                     +(dt).*((Dc_Ni.*c_old_dif2z_Ni)));
+
+                %concentration dependent
+                %main calculation of new [C] from old [C] using the above-defined finite difference terms
+                c_new_Fo(i,j,k)=c_old_Fo(i,j,k)+((dt).*((D_difx_Fo.*c_old_difx_Fo)+(Da_Fo(i,j,k).*c_old_dif2x_Fo))...
+                    +(dt).*((D_dify_Fo.*c_old_dify_Fo)+(Db_Fo(i,j,k).*c_old_dif2y_Fo))...
+                    +(dt).*((D_difz_Fo.*c_old_difz_Fo)+(Dc_Fo(i,j,k).*c_old_dif2z_Fo)));
+                
+                %main calculation of new [C] from old [C] using the above-defined finite difference terms
+                c_new_Ni(i,j,k)=c_old_Ni(i,j,k)+((dt).*((D_difx_Ni.*c_old_difx_Ni)+(Da_Ni(i,j,k).*c_old_dif2x_Ni))...
+                    +(dt).*((D_dify_Ni.*c_old_dify_Ni)+(Db_Ni(i,j,k).*c_old_dif2y_Ni))...
+                    +(dt).*((D_difz_Ni.*c_old_difz_Ni)+(Dc_Ni(i,j,k).*c_old_dif2z_Ni)));
+                
+            end
+        end
+    end
+    
+    %the four lines below continuously display the new concentration in 2D accross the middle of the crystal (along the z direction) at time l. Can be deleted for time-saving
+    %subplot(1,2,1)
+    %imagesc(c_new_Fo(:,:,((x1-1)/2)),[min_Fo max_Fo]);axis equal;axis tight
+    %subplot(1,2,2)
+    %imagesc(c_new_Ni(:,:,((x1-1)/2)),[min_Ni max_Ni]);axis equal;axis tight
+    %pause(eps)
+    %hold off
+    %drawnow
+    
+    %Here's the progress bar code, can also be deleted to save calculation time
+    t=toc;
+    Perc=double(l)/double(timesteps);
+    Trem=t/Perc-t; %Calculate the time remaining
+    Hrs=floor(Trem/3600);Min=floor((Trem-Hrs*3600)/60);
+    waitbar(Perc,wb,[sprintf('%0.1f',Perc*100) '%, '...
+        sprintf('%03.0f',Hrs) ':'...
+        sprintf('%02.0f',Min) ':'...
+        sprintf('%02.0f',rem(Trem,60)) ' remaining']);
+    
+    %redefine the crystal concentrations from c_new with far field conc. all around olivine (open boundary condition) to avoid changing the melt composition
+    c_new_Fo=c_new_Fo.*data_mask_Fo+data_Fo_ff;
+    c_new_Ni=c_new_Ni.*data_mask_Ni+data_Ni_ff;
+    
+    
+    %extract 2D matrix along the middle of the z direction to save for further use
+    c_all_Fo(:,:,l)=reshape(c_new_Fo(:,((x1-1)/2),:),x1,y1).*reshape(data_mask_Fo(:,((x1-1)/2),:),x1,y1);
+    c_all_Ni(:,:,l)=reshape(c_new_Ni(:,((x1-1)/2),:),x1,y1).*reshape(data_mask_Ni(:,((x1-1)/2),:),x1,y1);
+    %c_all_Fo_cr(l)=c_new_Fo((x1+1)/2,(y1+1)/2,(z1+1)/2);
+    %c_all_Ni_cr(l)=c_new_Ni((x1+1)/2,(y1+1)/2,(z1+1)/2);
+    
+%     %loop to interrogate as to whether the calculation has reached the number of timesteps previously defined for 3D matrix saving
+%     if l==time_to_save
+%         savefile = sprintf('3D_Fo_%04d.mat',time_to_save);
+%         save(savefile,'l','c_all_Fo_cr','c_new_Fo','dt');
+%         savefile = sprintf('3D_Ni_%04d.mat',time_to_save);
+%         save(savefile,'l','c_all_Ni_cr','c_new_Ni','dt');
+%         time_to_save = time_to_save+4000;
+%     end
+    
+end
+
+%close the waitbar
+close(wb)
+
+%apply mask for ease of visualization when the 2D image slice is displayed
+data_test_Fo=c_new_Fo.*data_mask_Fo;
+data_test_Ni=c_new_Ni.*data_mask_Ni;
+
+%display 2D image collected along z at the crystal center (after total diffusion time)
+%figure(1)
+%subplot(1,2,1)
+%imagesc(data_test_Fo(:,:,((x1-1)/2)),[min_Fo max_Fo]);axis equal;axis tight
+%subplot(1,2,2)
+%imagesc(data_test_Ni(:,:,((x1-1)/2)),[min_Ni max_Ni]);axis equal;axis tight
+
+% uncomment to save files at the end
+% savefile = sprintf('3D_Fo_%04d.mat',l);
+% save(savefile,'l','c_all_Fo','c_new_Fo','dt');
+% savefile = sprintf('3D_Ni_%04d.mat',l);
+% save(savefile,'l','c_all_Ni','c_new_Ni','dt');
+
+t_i=dt.*double(([1:timesteps]));
+
+plot(squeeze(100.*c_new_Fo(52,52,:)),squeeze(c_new_Ni(52,52,:)));%plots profile along z
+xlabel 'Fo content (mol%)';
+ylabel 'Ni content (wt.%)'
