@@ -1,3 +1,5 @@
+@author: Adrien J. Mourey
+
 clear all
 load('O_111_simple.mat');
 
